@@ -7,6 +7,29 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include "util.h"
+
+#define CRLF "\r\n"
+
+
+void print(const char* msg) {
+	std::cout << msg << std::endl;
+}
+
+std::string get_endpoint(char buf[]) {
+  std::string request (buf);
+  int start = request.find(" ") + 1;
+  int end = request.find(" ", start);
+  return request.substr(start, end - start);
+}
+
+std::string build_status (std::string status) {
+  return "HTTP/1.1 " + status + CRLF;
+}
+std::string build_headers(const std::string& content_type, int content_length) {
+  return "Content-Type: " + content_type + CRLF + 
+  "Content-Length: " + std::to_string(content_length) + CRLF;
+}
 
 int main(int argc, char **argv)
 {
@@ -67,17 +90,26 @@ int main(int argc, char **argv)
 	}
 	buff[bytes_received] = '\0';
 
-	std::string response_200 = "HTTP/1.1 200 OK\r\n\r\n";
-	std::string response_404 = "HTTP/1.1 404 Not Found\r\n\r\n";
-	
-	// parsing url target
-	std::string request(buff);
-    int start = request.find(" ") + 1;
-    int end = request.find(" ", start);
-    if (request.substr(start, end - start) == "/")
-      send(client_fd, response_200.c_str(), response_200.length(), 0);
+	// parsing url endpoint
+	std::string endpoint {get_endpoint(buff)};
+	std::string response;	
+
+	if (endpoint == "/")
+		response
+			.append(build_status("200 OK"))
+			.append(CRLF);
+	else if (endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo")
+		response
+			.append(build_status("200 OK"))
+			.append(build_headers("text/plain", endpoint.substr(6).length()))
+			.append(CRLF)
+			.append(endpoint.substr(6));
     else
-      send(client_fd, response_404.c_str(), response_404.length(), 0);
+		response
+			.append(build_status("404 Not Found"))
+			.append(CRLF);
+
+	send(client_fd, response.c_str(), response.length(), 0);
 
 	close(server_fd);
 	close(client_fd);
