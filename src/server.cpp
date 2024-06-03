@@ -132,12 +132,11 @@ int main(int argc, char **argv)
 			.append(CRLF)
 			.append(endpoint.substr(6));
 	else if (endpoint == "/user-agent") {
-		std::string response_body = "User-Agent: " + (*headers)["User-Agent"] + CRLF;
 		response
 			.append(build_status("200 OK"))
-			.append(build_headers("text/plain", response_body.length()))
+			.append(build_headers("text/plain", (*headers)["User-Agent"].length()))
 			.append(CRLF)
-			.append(response_body);
+			.append((*headers)["User-Agent"]);
 	}
 	else
 		response
