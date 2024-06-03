@@ -8,9 +8,11 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include "util.h"
+#include <sstream>
+#include <unordered_map> 
 
-#define CRLF "\r\n"
-
+using namespace std;
+const std::string CRLF = "\r\n";
 
 void print(const char* msg) {
 	std::cout << msg << std::endl;
@@ -23,9 +25,32 @@ std::string get_endpoint(char buf[]) {
   return request.substr(start, end - start);
 }
 
+std::unordered_map<std::string, std::string>* get_headers(char buf[])
+{
+	unordered_map<string, string>* headers = new unordered_map<string, string>();
+	std::string request(buf);
+	int start = request.find(CRLF) + 2;
+	int end = request.find(CRLF + CRLF, start);
+	std::string headers_str = request.substr(start, end - start);
+    std::istringstream stream(headers_str);
+    std::string line;
+
+    while (std::getline(stream, line) && !line.empty()) {
+        if (line.back() == '\r') line.pop_back();
+        std::size_t pos = line.find(": ");
+        if (pos != std::string::npos) {
+            std::string key = line.substr(0, pos);
+            std::string value = line.substr(pos + 2);
+            (*headers)[key] = value;
+        }
+    }
+    return headers;
+}
+
 std::string build_status (std::string status) {
   return "HTTP/1.1 " + status + CRLF;
 }
+
 std::string build_headers(const std::string& content_type, int content_length) {
   return "Content-Type: " + content_type + CRLF + 
   "Content-Length: " + std::to_string(content_length) + CRLF;
@@ -92,7 +117,10 @@ int main(int argc, char **argv)
 
 	// parsing url endpoint
 	std::string endpoint {get_endpoint(buff)};
-	std::string response;	
+	// parsing headers
+	std::unordered_map<std::string, std::string>* headers{get_headers(buff)};
+
+	std::string response;
 
 	if (endpoint == "/")
 		response
@@ -104,7 +132,15 @@ int main(int argc, char **argv)
 			.append(build_headers("text/plain", endpoint.substr(6).length()))
 			.append(CRLF)
 			.append(endpoint.substr(6));
-    else
+	else if (endpoint == "/user-agent") {
+		std::string response_body = "User-Agent: " + (*headers)["User-Agent"] + CRLF;
+		response
+			.append(build_status("200 OK"))
+			.append(build_headers("text/plain", response_body.length()))
+			.append(CRLF)
+			.append(response_body);
+	}
+	else
 		response
 			.append(build_status("404 Not Found"))
 			.append(CRLF);
