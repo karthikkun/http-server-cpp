@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <cstdlib>
 #include <string>
 #include <cstring>
@@ -10,12 +11,15 @@
 #include <sstream>
 #include <unordered_map> 
 #include <thread>
+#include <sys/stat.h>
 
 #define CONNECTION_BACKLOG 5
 #define MAX_THREADS 5
+#define CHUNK_SIZE 8192 // 8 KB
 
 using namespace std;
 const std::string CRLF = "\r\n";
+string directory;
 
 
 void print(const char* msg) {
@@ -142,6 +146,59 @@ void serve(ThreadSafeQueue<int> &queue) {
 				.append(build_headers("text/plain", (*headers)["User-Agent"].length()))
 				.append(CRLF)
 				.append((*headers)["User-Agent"]);
+		else if (!directory.empty() && endpoint.length() > 6 && endpoint.substr(0, 6) == "/files") {
+			string filename = directory + endpoint.substr(6);
+			struct stat sb;
+			if (stat(filename.c_str(), &sb) == 0 && !(sb.st_mode & S_IFDIR)) {
+				ifstream file(filename, ios::binary);
+				
+				if (!file.is_open()) {
+					response
+                        .append(build_status("500 Internal Server Error"))
+                        .append(CRLF);
+                    send(client_fd, response.c_str(), response.length(), 0);
+					close(client_fd);
+					continue;
+				}
+
+				file.seekg(0, ios::end);
+				size_t file_size = file.tellg();
+				file.seekg(0, ios::beg);
+
+				// Send headers
+                response
+                    .append(build_status("200 OK"))
+                    .append(build_headers("application/octet-stream", file_size))
+                    .append(CRLF);
+				send(client_fd, response.c_str(), response.length(), 0);
+
+				// Send file in chunks
+				long long total_bytes_sent = 0;
+                char buffer[CHUNK_SIZE];
+                while (file) {
+                    file.read(buffer, CHUNK_SIZE);
+                    streamsize bytes_read = file.gcount();
+                    if (bytes_read > 0) {
+                        ssize_t bytes_sent = 0;
+                        while (bytes_sent < bytes_read) {
+                            ssize_t result = send(client_fd, buffer + bytes_sent, bytes_read - bytes_sent, 0);
+                            if (result < 0) {
+                                std::cerr << "send failed\n";
+                                close(client_fd);
+                                break;
+                            }
+                            bytes_sent += result;
+                        }
+                    }
+					total_bytes_sent += bytes_read;
+                }
+				file.close();
+				response.clear();
+			} else
+				response
+					.append(build_status("404 Not Found"))
+					.append(CRLF);
+		}
 		else
 			response
 				.append(build_status("404 Not Found"))
@@ -158,6 +215,13 @@ int main(int argc, char **argv)
 	// Flush after every std::cout / std::cerr
 	std::cout << std::unitbuf;
 	std::cerr << std::unitbuf;
+	
+	for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--directory" && i + 1 < argc) {
+            directory = argv[i + 1];
+            break;
+        }
+    }
 
 	int server_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_fd < 0)
@@ -194,7 +258,7 @@ int main(int argc, char **argv)
 
 	master.join();
     for (auto &t : workers) t.join();
-	
+
 	close(server_fd);
 	return 0;
 }
