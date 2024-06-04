@@ -9,9 +9,14 @@
 #include <netdb.h>
 #include <sstream>
 #include <unordered_map> 
+#include <thread>
+
+#define CONNECTION_BACKLOG 5
+#define MAX_THREADS 5
 
 using namespace std;
 const std::string CRLF = "\r\n";
+
 
 void print(const char* msg) {
 	std::cout << msg << std::endl;
@@ -51,8 +56,101 @@ std::string build_status (std::string status) {
 }
 
 std::string build_headers(const std::string& content_type, int content_length) {
-  return "Content-Type: " + content_type + CRLF + 
+  return "Content-Type: " + content_type + CRLF	 + 
   "Content-Length: " + std::to_string(content_length) + CRLF;
+}
+
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+
+template<typename T>
+class ThreadSafeQueue {
+public:
+    void push(T value) {
+        lock_guard<mutex> lock(mtx);
+        Q.push(value);
+        cv.notify_one();
+    }
+
+    T pop() {
+        unique_lock<mutex> lock(mtx);
+        cv.wait(lock, [this]{ return !Q.empty(); });
+        T value = Q.front();
+        Q.pop();
+        return value;
+    }
+
+private:
+    queue<T> Q;
+    mutex mtx;
+    condition_variable cv;
+};
+
+
+void listening(int server_fd, ThreadSafeQueue<int> &queue) {
+	cout << "Listening " << this_thread::get_id() << endl;
+	while(true) {
+		int flag = listen(server_fd, CONNECTION_BACKLOG);
+		if (flag == -1) {
+			std::cerr << "listen failed\n";
+			continue;
+		}
+		struct sockaddr_in client_addr;
+		socklen_t client_addr_len = sizeof(client_addr);
+		std::cout << "Waiting for a client to connect...\n";
+		int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, (socklen_t *)&client_addr_len);
+		std::cout << "Client connected\n";
+		queue.push(client_fd);
+	}
+}
+
+
+void serve(ThreadSafeQueue<int> &queue) {
+	cout << "Serve " << this_thread::get_id() << endl;
+	while (true) {
+		int client_fd = queue.pop();
+		char buff[65536] = {};
+		ssize_t bytes_received = recv(client_fd, buff, sizeof(buff) - 1, 0);
+		if (bytes_received < 0) {
+			std::cerr << "recv failed\n";
+			close(client_fd);
+			continue;
+		}
+		buff[bytes_received] = '\0';
+
+		// parsing url endpoint
+		std::string endpoint {get_endpoint(buff)};
+		// parsing headers
+		std::unordered_map<std::string, std::string>* headers{get_headers(buff)};
+
+		std::string response;
+
+		if (endpoint == "/")
+			response
+				.append(build_status("200 OK"))
+				.append(CRLF);
+		else if (endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo")
+			response
+				.append(build_status("200 OK"))
+				.append(build_headers("text/plain", endpoint.substr(6).length()))
+				.append(CRLF)
+				.append(endpoint.substr(6));
+		else if (endpoint == "/user-agent")
+			response
+				.append(build_status("200 OK"))
+				.append(build_headers("text/plain", (*headers)["User-Agent"].length()))
+				.append(CRLF)
+				.append((*headers)["User-Agent"]);
+		else
+			response
+				.append(build_status("404 Not Found"))
+				.append(CRLF);
+
+		send(client_fd, response.c_str(), response.length(), 0);
+
+		close(client_fd);
+	}
 }
 
 int main(int argc, char **argv)
@@ -88,65 +186,15 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	int connection_backlog = 5;
-	if (listen(server_fd, connection_backlog) != 0)
-	{
-		std::cerr << "listen failed\n";
-		close(server_fd);
-		return 1;
-	}
+	ThreadSafeQueue<int> client_queue;
+	thread master(listening, server_fd, ref(client_queue));
+	vector<thread> workers;
+    for (int i = 0; i < MAX_THREADS; ++i)
+        workers.push_back(thread(serve, ref(client_queue)));
 
-	struct sockaddr_in client_addr;
-	socklen_t client_addr_len = sizeof(client_addr);
-
-	std::cout << "Waiting for a client to connect...\n";
-
-	int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, (socklen_t *)&client_addr_len);
-	std::cout << "Client connected\n";
-
-	char buff[65536] = {};
-	ssize_t bytes_received = recv(client_fd, buff, sizeof(buff) - 1, 0);
-	if (bytes_received < 0) {
-		std::cerr << "recv failed\n";
-		close(client_fd);
-		close(server_fd);
-		return 1;
-	}
-	buff[bytes_received] = '\0';
-
-	// parsing url endpoint
-	std::string endpoint {get_endpoint(buff)};
-	// parsing headers
-	std::unordered_map<std::string, std::string>* headers{get_headers(buff)};
-
-	std::string response;
-
-	if (endpoint == "/")
-		response
-			.append(build_status("200 OK"))
-			.append(CRLF);
-	else if (endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo")
-		response
-			.append(build_status("200 OK"))
-			.append(build_headers("text/plain", endpoint.substr(6).length()))
-			.append(CRLF)
-			.append(endpoint.substr(6));
-	else if (endpoint == "/user-agent") {
-		response
-			.append(build_status("200 OK"))
-			.append(build_headers("text/plain", (*headers)["User-Agent"].length()))
-			.append(CRLF)
-			.append((*headers)["User-Agent"]);
-	}
-	else
-		response
-			.append(build_status("404 Not Found"))
-			.append(CRLF);
-
-	send(client_fd, response.c_str(), response.length(), 0);
-
+	master.join();
+    for (auto &t : workers) t.join();
+	
 	close(server_fd);
-	close(client_fd);
-
 	return 0;
 }
