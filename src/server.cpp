@@ -71,9 +71,10 @@ std::string build_status (std::string status) {
   return "HTTP/1.1 " + status + CRLF;
 }
 
-std::string build_headers(const std::string& content_type, int content_length) {
+std::string build_headers(const std::string& content_type, int content_length, bool encode=false) {
   return "Content-Type: " + content_type + CRLF	 + 
-  "Content-Length: " + std::to_string(content_length) + CRLF;
+  "Content-Length: " + std::to_string(content_length) + CRLF +
+  (encode ? "Content-Encoding: gzip" + CRLF: "");
 }
 
 #include <queue>
@@ -143,17 +144,25 @@ void serve(ThreadSafeQueue<int> &queue) {
 		std::string request_method {get_request_method(buff)};
 
 		std::string response;
+		bool encode; // false
 
 		if (request_method == "GET" && endpoint == "/")
 			response
 				.append(build_status("200 OK"))
 				.append(CRLF);
-		else if (request_method == "GET" && endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo")
+		else if (request_method == "GET" && endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo") {
+			if(headers->find("Accept-Encoding") != headers->end()) {
+				string encoding = (*headers)["Accept-Encoding"];
+				if (encoding == "gzip") encode = true;
+			}
+
 			response
 				.append(build_status("200 OK"))
-				.append(build_headers("text/plain", endpoint.substr(6).length()))
+				.append(build_headers("text/plain", endpoint.substr(6).length(), encode))
 				.append(CRLF)
 				.append(endpoint.substr(6));
+
+		}
 		else if (request_method == "GET" && endpoint == "/user-agent")
 			response
 				.append(build_status("200 OK"))
