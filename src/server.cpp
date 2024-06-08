@@ -217,7 +217,7 @@ void serve(ThreadSafeQueue<int> &queue) {
                     continue;
                 }
 
-                response = build_status("200 OK") + CRLF;
+                response = build_status("201 Created") + CRLF;
                 send(client_fd, response.c_str(), response.length(), 0);
 
                 response.clear();
