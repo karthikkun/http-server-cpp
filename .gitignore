@@ -45,5 +45,8 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 
-
+#vscode config
 .vscode
+
+# temporary files
+data/

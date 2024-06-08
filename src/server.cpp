@@ -22,9 +22,14 @@ const std::string CRLF = "\r\n";
 string directory;
 
 
-void print(const char* msg) {
+void println(const char* msg) {
 	std::cout << msg << std::endl;
 }
+
+void print(const char* msg) {
+	std::cout << msg;
+}
+
 
 std::string get_endpoint(char buf[]) {
   std::string request (buf);
@@ -53,6 +58,13 @@ std::unordered_map<std::string, std::string>* get_headers(char buf[])
         }
     }
     return headers;
+}
+
+string get_request_method(char buf[]) {
+	std::string request (buf);
+	int start = 0;
+	int end = request.find(" ");
+	return request.substr(start, end-start);
 }
 
 std::string build_status (std::string status) {
@@ -127,6 +139,8 @@ void serve(ThreadSafeQueue<int> &queue) {
 		std::string endpoint {get_endpoint(buff)};
 		// parsing headers
 		std::unordered_map<std::string, std::string>* headers{get_headers(buff)};
+		// parsing request method : GET | POST
+		std::string request_method {get_request_method(buff)};
 
 		std::string response;
 
@@ -147,57 +161,121 @@ void serve(ThreadSafeQueue<int> &queue) {
 				.append(CRLF)
 				.append((*headers)["User-Agent"]);
 		else if (!directory.empty() && endpoint.length() > 6 && endpoint.substr(0, 6) == "/files") {
-			string filename = directory + endpoint.substr(6);
-			struct stat sb;
-			if (stat(filename.c_str(), &sb) == 0 && !(sb.st_mode & S_IFDIR)) {
-				ifstream file(filename, ios::binary);
-				
+			print(request_method.c_str());
+			if (request_method == "POST") {
+				string filename = directory + endpoint.substr(6);
+				size_t content_length = stoi((*headers)["Content-Length"]);
+				ofstream file(filename, ios::binary);
+
 				if (!file.is_open()) {
 					response
-                        .append(build_status("500 Internal Server Error"))
-                        .append(CRLF);
-                    send(client_fd, response.c_str(), response.length(), 0);
+						.append(build_status("500 Internal Server Error"))
+						.append(CRLF);
+					send(client_fd, response.c_str(), response.length(), 0);
 					close(client_fd);
 					continue;
-				}
+            	}
 
-				file.seekg(0, ios::end);
-				size_t file_size = file.tellg();
-				file.seekg(0, ios::beg);
+				// Calculate how many bytes of the body have already been read
+                std::string initial_request(buff);
+                size_t body_start = initial_request.find(CRLF + CRLF) + 4;
+                size_t initial_body_bytes = bytes_received - body_start;
 
-				// Send headers
-                response
-                    .append(build_status("200 OK"))
-                    .append(build_headers("application/octet-stream", file_size))
-                    .append(CRLF);
-				send(client_fd, response.c_str(), response.length(), 0);
-
-				// Send file in chunks
-				long long total_bytes_sent = 0;
-                char buffer[CHUNK_SIZE];
-                while (file) {
-                    file.read(buffer, CHUNK_SIZE);
-                    streamsize bytes_read = file.gcount();
-                    if (bytes_read > 0) {
-                        ssize_t bytes_sent = 0;
-                        while (bytes_sent < bytes_read) {
-                            ssize_t result = send(client_fd, buffer + bytes_sent, bytes_read - bytes_sent, 0);
-                            if (result < 0) {
-                                std::cerr << "send failed\n";
-                                close(client_fd);
-                                break;
-                            }
-                            bytes_sent += result;
-                        }
-                    }
-					total_bytes_sent += bytes_read;
+                if (initial_body_bytes > 0) {
+                    file.write(buff + body_start, initial_body_bytes);
                 }
-				file.close();
-				response.clear();
-			} else
-				response
-					.append(build_status("404 Not Found"))
-					.append(CRLF);
+
+                // Read the remaining request body in chunks
+                ssize_t total_bytes_received = initial_body_bytes;
+                char buffer[CHUNK_SIZE];
+                while (total_bytes_received < content_length) {
+                    ssize_t to_read = min(static_cast<size_t>(CHUNK_SIZE), content_length - total_bytes_received);
+                    ssize_t bytes_received_chunk = recv(client_fd, buffer, to_read, 0);
+                    
+                    if (bytes_received_chunk < 0) {
+                        std::cerr << "recv failed with error: " << strerror(errno) << "\n";
+                        file.close();
+                        close(client_fd);
+                        break;
+                    }
+                    if (bytes_received_chunk == 0) {
+                        std::cerr << "client closed connection\n";
+                        break;
+                    }
+
+                    file.write(buffer, bytes_received_chunk);
+                    total_bytes_received += bytes_received_chunk;
+                }
+
+                file.close();
+
+                if (total_bytes_received < content_length) {
+                    std::cerr << "recv failed, expected " << content_length << " bytes, received " << total_bytes_received << " bytes\n";
+                    response.append(build_status("400 Bad Request")).append(CRLF);
+                    send(client_fd, response.c_str(), response.length(), 0);
+                    close(client_fd);
+                    continue;
+                }
+
+                response = build_status("200 OK") + CRLF;
+                send(client_fd, response.c_str(), response.length(), 0);
+
+                response.clear();
+			}
+			if (request_method == "GET") {
+				string filename = directory + endpoint.substr(6);
+				struct stat sb;
+				if (stat(filename.c_str(), &sb) == 0 && !(sb.st_mode & S_IFDIR)) {
+					ifstream file(filename, ios::binary);
+					
+					if (!file.is_open()) {
+						response
+							.append(build_status("500 Internal Server Error"))
+							.append(CRLF);
+						send(client_fd, response.c_str(), response.length(), 0);
+						close(client_fd);
+						continue;
+					}
+
+					file.seekg(0, ios::end);
+					size_t file_size = file.tellg();
+					file.seekg(0, ios::beg);
+
+					// Send headers
+					response
+						.append(build_status("200 OK"))
+						.append(build_headers("application/octet-stream", file_size))
+						.append(CRLF);
+					send(client_fd, response.c_str(), response.length(), 0);
+
+					// Send file in chunks
+					long long total_bytes_sent = 0;
+					char buffer[CHUNK_SIZE];
+					while (file) {
+						file.read(buffer, CHUNK_SIZE);
+						streamsize bytes_read = file.gcount();
+						if (bytes_read > 0) {
+							ssize_t bytes_sent = 0;
+							while (bytes_sent < bytes_read) {
+								ssize_t result = send(client_fd, buffer + bytes_sent, bytes_read - bytes_sent, 0);
+								if (result < 0) {
+									std::cerr << "send failed\n";
+									close(client_fd);
+									break;
+								}
+								bytes_sent += result;
+							}
+						}
+						total_bytes_sent += bytes_read;
+					}
+
+					file.close();
+					response.clear();
+				} else
+					response
+						.append(build_status("404 Not Found"))
+						.append(CRLF);
+			}
 		}
 		else
 			response
