@@ -144,24 +144,23 @@ void serve(ThreadSafeQueue<int> &queue) {
 
 		std::string response;
 
-		if (endpoint == "/")
+		if (request_method == "GET" && endpoint == "/")
 			response
 				.append(build_status("200 OK"))
 				.append(CRLF);
-		else if (endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo")
+		else if (request_method == "GET" && endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo")
 			response
 				.append(build_status("200 OK"))
 				.append(build_headers("text/plain", endpoint.substr(6).length()))
 				.append(CRLF)
 				.append(endpoint.substr(6));
-		else if (endpoint == "/user-agent")
+		else if (request_method == "GET" && endpoint == "/user-agent")
 			response
 				.append(build_status("200 OK"))
 				.append(build_headers("text/plain", (*headers)["User-Agent"].length()))
 				.append(CRLF)
 				.append((*headers)["User-Agent"]);
 		else if (!directory.empty() && endpoint.length() > 6 && endpoint.substr(0, 6) == "/files") {
-			print(request_method.c_str());
 			if (request_method == "POST") {
 				string filename = directory + endpoint.substr(6);
 				size_t content_length = stoi((*headers)["Content-Length"]);
