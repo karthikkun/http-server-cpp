@@ -11,6 +11,7 @@ public:
     void add(const std::string& token);
     std::string* getData() const;
     size_t getSize() const;
+    bool contains(const std::string& token) const;
 
 private:
     void resize();
@@ -20,5 +21,6 @@ private:
 };
 
 void splitString(const std::string& str, char delimiter, DynamicArray& tokens);
+std::string lstrip(const std::string& str);
 
 #endif

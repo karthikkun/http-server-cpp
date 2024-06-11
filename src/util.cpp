@@ -33,11 +33,28 @@ void DynamicArray::resize() {
     data = newData;
 }
 
+bool DynamicArray::contains(const std::string& token) const {
+    for (size_t i = 0; i < size; ++i) {
+        if (data[i] == token) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void splitString(const std::string& str, char delimiter, DynamicArray& tokens) {
     std::string token;
     std::stringstream ss(str);
     
     while (std::getline(ss, token, delimiter)) {
-        tokens.add(token);
+        tokens.add(lstrip(token));
     }
+}
+
+std::string lstrip(const std::string& str) {
+    size_t start = 0;
+    while (start < str.size() && std::isspace(str[start])) {
+        ++start;
+    }
+    return str.substr(start);
 }
