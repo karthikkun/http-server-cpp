@@ -12,6 +12,7 @@
 #include <unordered_map> 
 #include <thread>
 #include <sys/stat.h>
+#include "util.h"
 
 #define CONNECTION_BACKLOG 5
 #define MAX_THREADS 5
@@ -146,16 +147,17 @@ void serve(ThreadSafeQueue<int> &queue) {
 		std::string response;
 		bool encode; // false
 
+		DynamicArray *acceptedEncodings = new DynamicArray();
+		if(headers->find("Accept-Encoding") != headers->end()) {
+			splitString((*headers)["Accept-Encoding"], ',', *acceptedEncodings);
+			if (acceptedEncodings->contains("gzip")) encode = true;
+		}
+
 		if (request_method == "GET" && endpoint == "/")
 			response
 				.append(build_status("200 OK"))
 				.append(CRLF);
 		else if (request_method == "GET" && endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo") {
-			if(headers->find("Accept-Encoding") != headers->end()) {
-				string encoding = (*headers)["Accept-Encoding"];
-				if (encoding == "gzip") encode = true;
-			}
-
 			response
 				.append(build_status("200 OK"))
 				.append(build_headers("text/plain", endpoint.substr(6).length(), encode))
