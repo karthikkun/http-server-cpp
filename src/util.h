@@ -22,5 +22,6 @@ private:
 
 void splitString(const std::string& str, char delimiter, DynamicArray& tokens);
 std::string lstrip(const std::string& str);
+bool gzipCompress(const char* inputData, size_t inputSize, char* &outputData, size_t& outputSize);
 
 #endif
