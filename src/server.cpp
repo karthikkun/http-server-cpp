@@ -158,12 +158,31 @@ void serve(ThreadSafeQueue<int> &queue) {
 				.append(build_status("200 OK"))
 				.append(CRLF);
 		else if (request_method == "GET" && endpoint.length() > 5 && endpoint.substr(0, 5) == "/echo") {
+			// const char *data = endpoint.substr(6).c_str();
+			std::string data = endpoint.substr(6);
+			char *outputData = nullptr;
+			size_t inputSize = data.size(), outputSize;
+			if (!encode) { 
+				outputData = &data[0];
+				outputSize = inputSize;
+			}
+			else if (!gzipCompress(data.c_str(), inputSize, outputData, outputSize)) {
+				response
+					.append(build_status("500 Internal Server Error:: Compression Failed"))
+					.append(CRLF);
+				send(client_fd, response.c_str(), response.length(), 0);
+				close(client_fd);
+				continue;
+			}
 			response
 				.append(build_status("200 OK"))
-				.append(build_headers("text/plain", endpoint.substr(6).length(), encode))
+				.append(build_headers("text/plain", outputSize, encode))
 				.append(CRLF)
-				.append(endpoint.substr(6));
-
+				.append(std::string(outputData, outputSize));
+			
+			if (encode && outputData) {
+				delete[] outputData; // Only delete if memory was allocated
+			}
 		}
 		else if (request_method == "GET" && endpoint == "/user-agent")
 			response
